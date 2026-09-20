@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Adaptive Speed</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Adaptive Speed</h1>
+      <label class="switch">
+        <input type="checkbox" id="enabled" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="field">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="audio-only">Audio only (silence → fast)</option>
+        <option value="audio-and-motion">Audio + motion (experimental)</option>
+      </select>
+      <p class="hint" id="motionHint">
+        Adds frame-difference motion detection. Only works on same-origin or
+        CORS-enabled video (e.g. YouTube); silently falls back to audio-only
+        otherwise.
+      </p>
+    </section>
+
+    <section class="field-row">
+      <div class="field">
+        <label for="normalSpeed">Normal speed</label>
+        <input type="range" id="normalSpeed" min="0.5" max="3" step="0.05" />
+        <output id="normalSpeedOut"></output>
+      </div>
+      <div class="field">
+        <label for="quietSpeed">Quiet speed</label>
+        <input type="range" id="quietSpeed" min="1" max="8" step="0.1" />
+        <output id="quietSpeedOut"></output>
+      </div>
+    </section>
+
+    <section class="field">
+      <label for="silenceThresholdDb">Silence threshold</label>
+      <input type="range" id="silenceThresholdDb" min="-70" max="-20" step="1" />
+      <output id="silenceThresholdDbOut"></output>
+      <p class="hint">Audio quieter than this counts as silence. Lower = more sensitive.</p>
+    </section>
+
+    <section class="field checkbox-field">
+      <input type="checkbox" id="voiceBandBias" />
+      <label for="voiceBandBias">Bias toward speech frequencies (300Hz–3.4kHz)</label>
+    </section>
+
+    <section class="field-row">
+      <div class="field">
+        <label for="minSilenceMs">Silence buffer (ms)</label>
+        <input type="number" id="minSilenceMs" min="0" max="5000" step="50" />
+      </div>
+      <div class="field">
+        <label for="minVoiceMs">Voice buffer (ms)</label>
+        <input type="number" id="minVoiceMs" min="0" max="5000" step="50" />
+      </div>
+    </section>
+
+    <section class="field motion-only">
+      <label for="motionThreshold">Motion threshold</label>
+      <input type="range" id="motionThreshold" min="1" max="60" step="1" />
+      <output id="motionThresholdOut"></output>
+    </section>
+
+    <section class="field checkbox-field">
+      <input type="checkbox" id="showIndicator" />
+      <label for="showIndicator">Show speed badge on video</label>
+    </section>
+
+    <footer>
+      <span id="status"></span>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
