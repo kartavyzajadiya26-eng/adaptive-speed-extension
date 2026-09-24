@@ -1,42 +1,33 @@
-import type { AudioFrameFeatures, ExtensionSettings, VadEngine } from "../types";
+import type { AudioFrameFeatures, ExtensionSettings, VadEngine } from "../../src/types";
 
 /** How much louder than the tracked ambient noise floor a frame must be to
  *  count as speech, on top of the user's absolute silenceThresholdDb. */
 const NOISE_FLOOR_MARGIN_DB = 8;
 
-/** Time constant (ms) of the noise floor rising toward a louder reading.
- *  Slow on purpose — a few seconds of sustained loudness before the floor
- *  trusts it's the new ambient level — so a burst of speech can't drag the
- *  floor up and mask itself mid-sentence. (Was 0.005 per frame at 60 fps.) */
-const NOISE_FLOOR_RISE_TAU_MS = 3300;
+/** Rate the floor rises toward a louder reading (per frame, ~60/s via
+ *  requestAnimationFrame). Deliberately slow — a few seconds of sustained
+ *  loudness before the floor trusts it's the new ambient level — so a
+ *  burst of speech can't drag the floor up and mask itself mid-sentence. */
+const NOISE_FLOOR_RISE_RATE = 0.005;
 
-/** Time constant (ms) of the floor falling toward a quieter reading. Fast,
- *  so once speech stops the floor snaps back to the real ambient level.
- *  (Was 0.05 per frame at 60 fps.) */
-const NOISE_FLOOR_FALL_TAU_MS = 325;
+/** Rate the floor falls toward a quieter reading. Deliberately fast — under
+ *  a second — so once speech stops, the floor snaps back down to reveal
+ *  the actual ambient level again instead of staying pinned near the
+ *  loudness speech had left behind. */
+const NOISE_FLOOR_FALL_RATE = 0.05;
 
-/** How much recent zero-crossing-rate history the cadence check keeps,
- *  in ms. Short enough to catch a sustained tone within well under a
- *  second; long enough that a couple of noisy frames can't fool it. */
-const CADENCE_WINDOW_MS = 400;
+/** How many recent frames of zero-crossing-rate the cadence tracker keeps
+ *  (~400ms at 60fps via requestAnimationFrame) before it's willing to judge
+ *  a sound as monotone. Short enough to catch a sustained tone/alarm within
+ *  well under a second; long enough that a couple of frames of buffer noise
+ *  can't trigger a false read. */
+const CADENCE_WINDOW_FRAMES = 24;
 
 /** Minimum (max-min) swing in ZCR across that window for a sound to count
  *  as having the varying texture of real speech. A steady tone or hum sits
  *  well under this; speech — alternating vowels and consonants — clears it
  *  comfortably within one window. */
 const MONOTONE_ZCR_RANGE = 0.02;
-
-/** Warm-up: after this much audible audio, jump the noise floor straight to
- *  the quieter end of what was heard (20th percentile), instead of letting
- *  it creep up from silence over ~8 seconds. Measured on a steady-noise
- *  test, the slow start kept noise classified as speech for 7.9 s. The 20th
- *  percentile means a video that opens with speech still gets a floor near
- *  the gaps between words, not near the speech itself. */
-const WARMUP_MS = 1000;
-const WARMUP_PERCENTILE = 0.2;
-
-/** Assumed frame time when the caller doesn't pass one (60 fps). */
-const DEFAULT_DT_MS = 1000 / 60;
 
 /**
  * Default VAD: a DSP heuristic, not a machine-learning model.
@@ -89,54 +80,32 @@ const DEFAULT_DT_MS = 1000 / 60;
  */
 export class HeuristicVad implements VadEngine {
   private noiseFloorDb = -100;
-  /** Recent (time, zero-crossing rate) readings, oldest first. */
-  private readonly zcr: { t: number; v: number }[] = [];
-  private clockMs = 0;
-  private warmupMs = 0;
-  private warmupLevels: number[] | null = [];
+  private readonly zcrWindow: number[] = [];
 
-  isVoice(features: AudioFrameFeatures, settings: ExtensionSettings, dtMs = DEFAULT_DT_MS): boolean {
-    const dt = Math.min(Math.max(dtMs, 1), 100);
-    this.clockMs += dt;
-
-    if (this.warmupLevels && features.rmsDb > -90) {
-      this.warmupLevels.push(features.rmsDb);
-      this.warmupMs += dt;
-      if (this.warmupMs >= WARMUP_MS) {
-        const sorted = this.warmupLevels.sort((a, b) => a - b);
-        const p = sorted[Math.floor(sorted.length * WARMUP_PERCENTILE)]!;
-        this.noiseFloorDb = Math.max(this.noiseFloorDb, p);
-        this.warmupLevels = null;
-      }
-    }
-
-    const effectiveThreshold = Math.max(settings.silenceThresholdDb, this.noiseFloorDb + NOISE_FLOOR_MARGIN_DB);
+  isVoice(features: AudioFrameFeatures, settings: ExtensionSettings): boolean {
+    const effectiveThreshold = Math.max(
+      settings.silenceThresholdDb,
+      this.noiseFloorDb + NOISE_FLOOR_MARGIN_DB
+    );
     const loudEnough = features.rmsDb > effectiveThreshold;
 
     // Require at least 35% of energy in the speech band once we're already
-    // above the loudness floor (picked by hand; see eval/ for measurements).
+    // above the loudness floor. Threshold picked empirically to tolerate
+    // normal spectral variance in speech, not tuned against a labeled set
+    // — treat it as a starting point, and expose it in the popup if you
+    // find it needs adjusting for your content.
     const soundsLikeSpeech = !settings.voiceBandBias || features.voiceBandRatio >= 0.35;
 
-    this.zcr.push({ t: this.clockMs, v: features.zeroCrossingRate });
-    while (this.zcr.length > 0 && this.clockMs - this.zcr[0]!.t > CADENCE_WINDOW_MS) this.zcr.shift();
-    // Judge cadence only once the window spans (almost) its full length.
-    const windowFull = this.clockMs - this.zcr[0]!.t >= CADENCE_WINDOW_MS - 2 * dt;
-    let zcrRange = Infinity;
-    if (windowFull) {
-      let lo = Infinity;
-      let hi = -Infinity;
-      for (const z of this.zcr) {
-        if (z.v < lo) lo = z.v;
-        if (z.v > hi) hi = z.v;
-      }
-      zcrRange = hi - lo;
-    }
+    this.zcrWindow.push(features.zeroCrossingRate);
+    if (this.zcrWindow.length > CADENCE_WINDOW_FRAMES) this.zcrWindow.shift();
+    const windowFull = this.zcrWindow.length === CADENCE_WINDOW_FRAMES;
+    const zcrRange = windowFull ? Math.max(...this.zcrWindow) - Math.min(...this.zcrWindow) : Infinity;
     const hasSpeechCadence = !settings.voiceBandBias || zcrRange >= MONOTONE_ZCR_RANGE;
 
     const isVoice = loudEnough && soundsLikeSpeech && hasSpeechCadence;
 
-    const tau = features.rmsDb > this.noiseFloorDb ? NOISE_FLOOR_RISE_TAU_MS : NOISE_FLOOR_FALL_TAU_MS;
-    this.noiseFloorDb += (features.rmsDb - this.noiseFloorDb) * (1 - Math.exp(-dt / tau));
+    const rate = features.rmsDb > this.noiseFloorDb ? NOISE_FLOOR_RISE_RATE : NOISE_FLOOR_FALL_RATE;
+    this.noiseFloorDb += (features.rmsDb - this.noiseFloorDb) * rate;
 
     return isVoice;
   }

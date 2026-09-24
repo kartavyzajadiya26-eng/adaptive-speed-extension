@@ -21,9 +21,9 @@
         <option value="audio-and-motion">Audio + motion (experimental)</option>
       </select>
       <p class="hint" id="motionHint">
-        Adds frame-difference motion detection. Only works on same-origin or
-        CORS-enabled video (e.g. YouTube); silently falls back to audio-only
-        otherwise.
+        Silent parts where something on screen moves (a demo, a cursor, a
+        gesture) get a gentler speed-up. Only works on same-origin or
+        CORS-enabled video (e.g. YouTube); otherwise acts as audio-only.
       </p>
     </section>
 
@@ -44,12 +44,26 @@
       <label for="silenceThresholdDb">Silence threshold</label>
       <input type="range" id="silenceThresholdDb" min="-70" max="-20" step="1" />
       <output id="silenceThresholdDbOut"></output>
-      <p class="hint">Audio quieter than this counts as silence. Lower = more sensitive.</p>
+      <p class="hint">Used by the backup detector only (the speech model ignores loudness). Audio quieter than this counts as silence.</p>
     </section>
 
     <section class="field checkbox-field">
       <input type="checkbox" id="voiceBandBias" />
-      <label for="voiceBandBias">Bias toward speech frequencies (300Hz–3.4kHz)</label>
+      <label for="voiceBandBias">Backup detector: bias toward speech frequencies</label>
+    </section>
+
+    <section class="field">
+      <label for="pauseHandling">Pause handling</label>
+      <select id="pauseHandling">
+        <option value="relaxed">Relaxed: only long pauses</option>
+        <option value="balanced">Balanced: learns the speaker's rhythm</option>
+        <option value="aggressive">Aggressive: most pauses</option>
+      </select>
+    </section>
+
+    <section class="field checkbox-field">
+      <input type="checkbox" id="replaySentenceStarts" />
+      <label for="replaySentenceStarts">Replay sentence starts at normal speed</label>
     </section>
 
     <section class="field-row">
