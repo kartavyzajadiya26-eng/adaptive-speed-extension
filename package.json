@@ -7,7 +7,10 @@
     "build": "node build.js",
     "watch": "node build.js --watch",
     "typecheck": "tsc --noEmit",
-    "package": "node build.js && node scripts/zip.js"
+    "package": "node build.js && node scripts/zip.js",
+    "bench": "esbuild eval/bench.ts --bundle --platform=node --log-level=error --outfile=eval/results/bench.cjs && node eval/results/bench.cjs",
+    "check:silero": "esbuild eval/checkSilero.ts --bundle --platform=node --log-level=error --outfile=eval/results/checkSilero.cjs && node eval/results/checkSilero.cjs",
+    "check:motion": "esbuild eval/motionCheck.ts --bundle --platform=node --log-level=error --outfile=eval/results/motionCheck.cjs && node eval/results/motionCheck.cjs"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +18,7 @@
   "devDependencies": {
     "@types/chrome": "^0.3.0",
     "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
     "typescript": "^5.6.3"
   }
 }

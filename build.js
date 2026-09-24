@@ -15,17 +15,23 @@ const entryPoints = {
   content: "src/content/content.ts",
   background: "src/background/background.ts",
   popup: "src/popup/popup.ts",
+  // Loaded with audioWorklet.addModule(); runs on the audio thread.
+  "capture-worklet": "src/audio/captureWorklet.ts",
 };
 
 const staticFiles = [
   ["manifest.json", "manifest.json"],
   ["src/popup/popup.html", "popup.html"],
   ["src/popup/popup.css", "popup.css"],
+  // Silero VAD weights (MIT, snakers4/silero-vad), exported by eval/export_silero.py.
+  ["src/models/silero_vad_16k.bin", "models/silero_vad_16k.bin"],
+  ["src/models/LICENSE-silero.txt", "models/LICENSE-silero.txt"],
 ];
 
 function copyStaticFiles() {
   fs.mkdirSync(outdir, { recursive: true });
   for (const [from, to] of staticFiles) {
+    fs.mkdirSync(path.dirname(path.join(outdir, to)), { recursive: true });
     fs.copyFileSync(path.join(__dirname, from), path.join(outdir, to));
   }
 

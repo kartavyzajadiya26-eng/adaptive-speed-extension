@@ -6,6 +6,7 @@ import {
   resumeSharedAudioContext,
 } from "../audio/audioAnalyzer";
 import { HeuristicVad } from "../audio/voiceActivity";
+import { loadSileroWeights } from "../audio/neuralVad";
 import { MotionDetector } from "../vision/motionDetector";
 import type { ExtensionSettings, VadEngine } from "../types";
 import { SpeedController } from "./speedController";
@@ -23,6 +24,23 @@ const BUFFER_CHECK_MS = 250;
 
 type AudioState = "pending" | "ready" | "unavailable";
 
+/** Page-side switches for diagnosing the extension on a given site:
+ *    localStorage.adaptiveSpeedDebug = "1"   logs detector state once a second
+ *    localStorage.adaptiveSpeedVad = "rules" forces the DSP heuristic */
+function readDebugFlags(): { debug: boolean; forceRules: boolean; captureOnly: boolean } {
+  try {
+    const vad = localStorage.getItem("adaptiveSpeedVad");
+    return {
+      debug: localStorage.getItem("adaptiveSpeedDebug") === "1",
+      forceRules: vad === "rules",
+      // Profiling aid: run the audio capture but not the model.
+      captureOnly: vad === "capture-only",
+    };
+  } catch {
+    return { debug: false, forceRules: false, captureOnly: false };
+  }
+}
+
 /**
  * Owns the full pipeline for a single <video> element: audio analysis,
  * optional motion analysis, the speed decision, applying playbackRate, and
@@ -36,11 +54,17 @@ export class VideoPipeline {
   private audioState: AudioState = "pending";
   private motion: MotionDetector | null = null;
   private vad: VadEngine = new HeuristicVad();
+  private lastTickAt = 0;
+  private readonly flags = readDebugFlags();
+  private lastDebugAt = 0;
+  /** When our own sentence-start replay seek was issued (0 = none). */
+  private replaySeekAt = 0;
+  replays = 0;
   private readonly speedController: SpeedController;
   private readonly indicator: Indicator;
 
   private lastMotionSampleAt = 0;
-  private lastMotionScoreAboveThreshold = false;
+  private lastMotion = false;
   private lastBufferCheckAt = 0;
   private lowBuffer = false;
   private disposed = false;
@@ -58,6 +82,8 @@ export class VideoPipeline {
 
     video.addEventListener("play", this.handlePlay);
     video.addEventListener("playing", this.handlePlay);
+    video.addEventListener("pause", this.handlePause);
+    video.addEventListener("volumechange", this.handleVolume);
     video.addEventListener("seeking", this.handleSeeking);
     video.addEventListener("loadstart", this.handleNewSource);
 
@@ -72,6 +98,7 @@ export class VideoPipeline {
 
   private handlePlay = (): void => {
     if (!this.settings.enabled) return;
+    this.audio?.setCaptureActive(true);
     // Creating the context here (not at attach time) means pages with many
     // never-played videos never pay for Web Audio at all.
     getSharedAudioContext();
@@ -79,8 +106,35 @@ export class VideoPipeline {
     this.onActivity();
   };
 
+  /**
+   * Chrome applies the element's volume before Web Audio sees the signal
+   * (measured: 20% volume reads 14 dB quieter), so a user who turns a video
+   * down would push speech under the detectors' thresholds. This gain
+   * undoes that, capped at +26 dB (volume 5%).
+   */
+  private volumeGain(): number {
+    const v = this.video.volume;
+    return v > 0 ? Math.min(20, 1 / v) : 1;
+  }
+
+  private handleVolume = (): void => {
+    this.audio?.setInputGain(this.volumeGain());
+  };
+
+  private handlePause = (): void => {
+    this.audio?.setCaptureActive(false);
+  };
+
   private handleSeeking = (): void => {
+    if (this.replaySeekAt && performance.now() - this.replaySeekAt < 1000) {
+      // Our own short jump back: speech continues, keep all state.
+      this.replaySeekAt = 0;
+      return;
+    }
+    this.replaySeekAt = 0;
     this.speedController.reset(this.video.currentTime * 1000);
+    this.audio?.resetCapture();
+    this.motion?.reset();
     this.lastBufferCheckAt = 0;
   };
 
@@ -88,6 +142,7 @@ export class VideoPipeline {
   private handleNewSource = (): void => {
     this.speedController.resetAll(0);
     this.vad = new HeuristicVad();
+    this.audio?.resetCapture();
     this.lowBuffer = false;
     this.lastBufferCheckAt = 0;
     if (this.audioState === "unavailable") this.audioState = "pending";
@@ -109,6 +164,7 @@ export class VideoPipeline {
 
     if (!settings.enabled) {
       if (wasEnabled) this.video.playbackRate = 1.0;
+      this.audio?.setCaptureActive(false); // stop analysing while switched off
     } else if (!wasEnabled) {
       this.speedController.reset(this.video.currentTime * 1000);
       if (!this.video.paused) this.handlePlay();
@@ -134,20 +190,45 @@ export class VideoPipeline {
         motionEnabled: this.settings.mode === "audio-and-motion",
         hold: stalled,
         forceNormal: this.checkLowBuffer(now),
+        debounced: this.audio?.voice?.ready === true,
       },
       this.settings,
       now,
       video.currentTime * 1000
     );
 
-    // Only touch playbackRate when it actually changes: every assignment
-    // re-initialises the browser's pitch-preserving time stretcher.
     if (Math.abs(video.playbackRate - multiplier) > 0.001) {
       video.playbackRate = multiplier;
     }
 
+    const replayTo = this.speedController.takeReplayTarget();
+    if (replayTo !== null && this.canReplayTo(replayTo / 1000)) {
+      this.replaySeekAt = performance.now();
+      this.replays++;
+      video.currentTime = replayTo / 1000;
+    }
+
     this.indicator.update(multiplier, isVoice, isMotion);
+    if (this.flags.debug && now - this.lastDebugAt > 1000) this.logDebug(now, isVoice, multiplier);
     return true;
+  }
+
+  private logDebug(now: number, isVoice: boolean, rate: number): void {
+    this.lastDebugAt = now;
+    const n = this.audio?.voice ?? null;
+    console.debug(
+      "[AdaptiveSpeed][debug]",
+      JSON.stringify({
+        t: +this.video.currentTime.toFixed(2),
+        vad: n?.ready ? "neural" : "rules",
+        model: this.audio?.captureMode ?? "none",
+        prob: n ? +n.probability.toFixed(3) : null,
+        voice: isVoice,
+        rate,
+        mainThreadModelMs: this.audio?.mainThreadModelMs?.toFixed(3) ?? null,
+        audioThreadModelMs: this.audio?.workletModelMs?.toFixed(3) ?? null,
+      })
+    );
   }
 
   /** Lazily routes audio once it's both safe and useful to do so. */
@@ -167,10 +248,30 @@ export class VideoPipeline {
     try {
       this.audio = new AudioAnalyzer(this.video);
       this.audioState = "ready";
+      this.audio.setInputGain(this.volumeGain());
+      this.startNeuralVad(this.audio);
     } catch (err) {
       console.warn("[AdaptiveSpeed] Could not attach audio analysis:", err);
       this.audioState = "unavailable";
     }
+  }
+
+  /** Loads the speech model (shared across videos) and starts streaming audio to it. */
+  private startNeuralVad(audio: AudioAnalyzer): void {
+    if (this.flags.forceRules) return;
+    let weightsUrl: string;
+    let workletUrl: string;
+    try {
+      weightsUrl = chrome.runtime.getURL("models/silero_vad_16k.bin");
+      workletUrl = chrome.runtime.getURL("capture-worklet.js");
+    } catch {
+      return; // extension context gone (e.g. extension reloaded); keep the heuristic
+    }
+    void loadSileroWeights(weightsUrl).then((weights) => {
+      if (!weights || this.disposed || this.audio !== audio) return;
+      audio.enableNeuralVad(workletUrl, weights, this.flags.captureOnly ? "capture-only" : undefined);
+      audio.setCaptureActive(!this.video.paused);
+    });
   }
 
   private sampleVoice(now: number): boolean {
@@ -183,7 +284,17 @@ export class VideoPipeline {
 
     const features = audio.sample(now);
     if (audio.looksBlocked(now)) return true;
-    return this.vad.isVoice(features, this.settings);
+    const dtMs = this.lastTickAt ? Math.min(100, now - this.lastTickAt) : 16.7;
+    this.lastTickAt = now;
+    // Keep the heuristic's state warm even when the model is in charge, so
+    // a fallback mid-video starts from a sensible noise floor.
+    const heuristic = this.vad.isVoice(
+      { ...features, rmsDb: features.rmsDb + 20 * Math.log10(this.volumeGain()) },
+      this.settings,
+      dtMs
+    );
+    const neural = audio.voice;
+    return neural?.ready ? neural.isVoice : heuristic;
   }
 
   private sampleMotion(now: number): boolean {
@@ -191,16 +302,22 @@ export class VideoPipeline {
     if (this.motion.tainted) return true; // fail open, see MotionDetector docs
 
     const intervalMs = 1000 / Math.max(1, this.settings.motionSampleFps);
-    if (now - this.lastMotionSampleAt < intervalMs) {
-      return this.lastMotionScoreAboveThreshold;
-    }
+    if (now - this.lastMotionSampleAt < intervalMs) return this.lastMotion;
     this.lastMotionSampleAt = now;
 
-    const score = this.motion.sample();
-    if (score === null) return this.lastMotionScoreAboveThreshold;
+    const moving = this.motion.sample(this.settings.motionThreshold);
+    if (moving !== null) this.lastMotion = moving;
+    return this.lastMotion;
+  }
 
-    this.lastMotionScoreAboveThreshold = score >= this.settings.motionThreshold;
-    return this.lastMotionScoreAboveThreshold;
+  /** A replay jump must land inside already-buffered media, so it's a
+   *  quick local seek rather than a network refetch. */
+  private canReplayTo(t: number): boolean {
+    const { buffered } = this.video;
+    for (let i = 0; i < buffered.length; i++) {
+      if (t >= buffered.start(i) && this.video.currentTime <= buffered.end(i) && t <= this.video.currentTime) return true;
+    }
+    return false;
   }
 
   /** Hysteresis on buffered-ahead seconds so we don't flap at the edge. */
@@ -240,6 +357,8 @@ export class VideoPipeline {
     this.disposed = true;
     this.video.removeEventListener("play", this.handlePlay);
     this.video.removeEventListener("playing", this.handlePlay);
+    this.video.removeEventListener("pause", this.handlePause);
+    this.video.removeEventListener("volumechange", this.handleVolume);
     this.video.removeEventListener("seeking", this.handleSeeking);
     this.video.removeEventListener("loadstart", this.handleNewSource);
     this.audio?.dispose();
