@@ -185,7 +185,7 @@ footer{padding-block:40px;border-top:1px solid var(--line);color:var(--muted);fo
         <span id="playLabel">Play the demo</span>
       </button>
     </div>
-    <p class="caption">One minute of a lecture, simulated with the extension's real rules: a pause must last 0.6 s before speeding up, and speech returns to 1× at once. The demo runs 4× faster than real time.</p>
+    <p class="caption">One minute of a lecture, simulated with the extension's real rules: a pause must last 0.6 s before speeding up, and speech returns to 1× at once. The demo runs 4× faster than real time. Press Pause to stop it, or Play again to rewatch.</p>
   </div>
 </header>
 
@@ -348,7 +348,7 @@ footer{padding-block:40px;border-top:1px solid var(--line);color:var(--muted);fo
     }
     rateAt.push(r);
   }
-  const rate = (t) => rateAt[Math.min(rateAt.length - 1, Math.floor(t / STEP))];
+  const rate = (t) => rateAt[Math.max(0, Math.min(rateAt.length - 1, Math.floor(t / STEP)))];
 
   // Pseudo-random waveform heights.
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -396,14 +396,16 @@ footer{padding-block:40px;border-top:1px solid var(--line);color:var(--muted);fo
 
   function setPlaying(p) {
     playing = p; els.play.setAttribute("aria-pressed", String(p));
-    els.label.textContent = p ? "Pause" : t >= DURATION ? "Play again" : "Play the demo";
+    els.label.textContent = p ? "Pause" : t >= DURATION ? "Play again" : t > 0 ? "Resume" : "Play the demo";
     els.icon.innerHTML = p ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
     if (p) { last = performance.now(); requestAnimationFrame(frame); }
   }
 
   function frame(now) {
     if (!playing) return;
-    const dt = Math.min(0.1, (now - last) / 1000) * DEMO_RATE; last = now;
+    // rAF timestamps can be slightly older than the click that started us;
+    // clamp so the first step is never negative.
+    const dt = Math.max(0, Math.min(0.1, (now - last) / 1000)) * DEMO_RATE; last = now;
     wall += dt; t = Math.min(DURATION, t + dt * rate(t));
     show();
     if (t >= DURATION) { setPlaying(false); return; }
@@ -417,7 +419,10 @@ footer{padding-block:40px;border-top:1px solid var(--line);color:var(--muted);fo
 
   // At rest (and for reduced motion): show the finished minute with its result.
   function finalState() { let tt = 0, ww = 0; while (tt < DURATION) { ww += STEP; tt += STEP * rate(tt); } t = DURATION; wall = ww; show(); els.label.textContent = "Play the demo"; }
-  finalState();
+  // Start playing on its own (a silent canvas animation), unless the viewer
+  // asked for reduced motion; then show the finished minute and wait.
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) finalState();
+  else { show(); setPlaying(true); }
   window.addEventListener("resize", draw);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
