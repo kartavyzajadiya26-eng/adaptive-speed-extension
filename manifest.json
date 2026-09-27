@@ -3,7 +3,9 @@
   "name": "Adaptive Speed — Silence & Stillness Skipper",
   "version": "0.1.0",
   "description": "Speeds up video automatically during silence (and optionally stillness), and returns to normal speed when someone talks or something moves.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -23,12 +25,27 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "capture-worklet.js",
+        "models/silero_vad_16k.bin"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

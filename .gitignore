@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.zip
 .DS_Store
+eval/data/
+eval/results/
+eval/models/

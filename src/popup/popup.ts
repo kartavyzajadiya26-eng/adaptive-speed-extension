@@ -23,6 +23,8 @@ const els = {
   motionThreshold: byId<HTMLInputElement>("motionThreshold"),
   motionThresholdOut: byId<HTMLOutputElement>("motionThresholdOut"),
   showIndicator: byId<HTMLInputElement>("showIndicator"),
+  pauseHandling: byId<HTMLSelectElement>("pauseHandling"),
+  replaySentenceStarts: byId<HTMLInputElement>("replaySentenceStarts"),
   status: byId<HTMLSpanElement>("status"),
 };
 
@@ -49,6 +51,8 @@ async function main(): Promise<void> {
     els.minVoiceMs,
     els.motionThreshold,
     els.showIndicator,
+    els.pauseHandling,
+    els.replaySentenceStarts,
   ]) {
     el.addEventListener("input", onFormChange);
   }
@@ -65,6 +69,8 @@ function applyToForm(settings: ExtensionSettings): void {
   els.minVoiceMs.value = String(settings.minVoiceMs);
   els.motionThreshold.value = String(settings.motionThreshold);
   els.showIndicator.checked = settings.showIndicator;
+  els.pauseHandling.value = settings.pauseHandling;
+  els.replaySentenceStarts.checked = settings.replaySentenceStarts;
   updateOutputs();
   updateMotionVisibility();
 }
@@ -95,6 +101,8 @@ function readForm(): ExtensionSettings {
     motionThreshold: Number(els.motionThreshold.value),
     motionSampleFps: DEFAULT_SETTINGS.motionSampleFps,
     showIndicator: els.showIndicator.checked,
+    replaySentenceStarts: els.replaySentenceStarts.checked,
+    pauseHandling: els.pauseHandling.value as ExtensionSettings["pauseHandling"],
   };
 }
 

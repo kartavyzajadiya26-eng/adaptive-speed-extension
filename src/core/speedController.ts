@@ -1,4 +1,4 @@
-import type { ExtensionSettings, PipelineState } from "../types";
+import type { ExtensionSettings, PauseHandling, PipelineState } from "../types";
 
 /**
  * Time constant, in ms, of the smoothing applied to the raw per-frame
@@ -32,15 +32,38 @@ const SETTLE_MS = SMOOTHING_TAU_MS * Math.log(1 / ACTIVE_OFF);
  * of a second before speech resumed: an audible 1x-2.5x-1x lurch that saved
  * almost no time. Measured on real TED/YouTube talks this happened several
  * times a minute. So when a quiet stretch turns out to be this short, we
- * require longer silence next time (up to MAX_SILENCE_SCALE times the
+ * require longer silence next time (up to the profile's maxScale times the
  * user's setting); when quiet stretches are long, we relax back toward it.
  * The controller learns each speaker's pause rhythm within a few pauses.
  */
 /** A quiet stretch that saved the viewer less wall-clock time than this
  *  wasn't worth the two speed changes it cost. At 2.5x that means any
  *  stretch shorter than ~1.7s of video. */
-const MIN_WORTHWHILE_SAVING_MS = 1000;
-const MAX_SILENCE_SCALE = 3;
+const PAUSE_PROFILES: Record<PauseHandling, { minSavingMs: number; maxScale: number }> = {
+  relaxed: { minSavingMs: 1500, maxScale: 3.5 },
+  balanced: { minSavingMs: 1000, maxScale: 3 },
+  aggressive: { minSavingMs: 500, maxScale: 1.5 },
+};
+
+/** Sentence-start replay: how far before the detected speech onset to
+ *  resume, and bounds on the jump (shorter isn't worth a seek; longer
+ *  means something odd happened, e.g. a missed seek event). */
+const REPLAY_LEAD_MS = 200;
+const REPLAY_MIN_MS = 80;
+const REPLAY_MAX_MS = 700;
+
+/** Speed-ups ramp in over this much wall time, in RAMP_STEPS equal steps
+ *  (1x -> 1.5x -> 2x -> 2.5x by default) instead of one jarring jump.
+ *  Slowing down for speech is always instant: any ramp there would be
+ *  heard as sped-up speech. */
+const RAMP_MS = 240;
+const RAMP_STEPS = 3;
+
+/** In audio+motion mode, a silent but visibly moving scene plays at this
+ *  fraction of the way from normal to quiet speed (1.6x with defaults),
+ *  instead of blocking the speed-up entirely: silent demos and screen
+ *  recordings still get faster, just gently enough to follow. */
+const MOTION_SPEED_FRACTION = 0.4;
 const SILENCE_SCALE_UP = 1.5;
 const SILENCE_SCALE_DOWN = 0.85;
 
@@ -54,6 +77,10 @@ export interface SpeedSignals {
   /** Not enough media buffered to safely play faster: stay at normal speed
    *  (without forgetting the quiet state) so we don't cause stalls. */
   forceNormal?: boolean;
+  /** The detector already debounces its output (the neural model has its
+   *  own hysteresis), so skip the extra smoothing, which would only add
+   *  latency at every speech onset. */
+  debounced?: boolean;
 }
 
 /**
@@ -85,6 +112,10 @@ export class SpeedController {
   /** Multiplier on minSilenceMs, learned from how long quiet stretches last. */
   private silenceScale = 1;
   private quietSinceMedia = 0;
+  private pendingReplayTo: number | null = null;
+  private quietSinceWall = 0;
+  private lastWall = 0;
+  private motionSlowdown = false;
 
   private readonly state: PipelineState;
 
@@ -105,6 +136,7 @@ export class SpeedController {
     this.rawStateSince = mediaNow;
     this.lastUpdateAt = null;
     this.lastMediaAt = null;
+    this.pendingReplayTo = null;
     // silenceScale is deliberately kept: a seek doesn't change the speaker.
   }
 
@@ -140,6 +172,7 @@ export class SpeedController {
   ): number {
     this.state.isVoice = signals.isVoice;
     this.state.isMotion = signals.isMotion;
+    this.lastWall = now;
 
     if (signals.hold) {
       // Freeze the timers so buffering silence never accumulates into a
@@ -150,9 +183,10 @@ export class SpeedController {
       return this.output(settings, signals.forceNormal);
     }
 
-    // "Active" (should run at normalSpeed) means: someone is talking, OR
-    // — only when motion gating is enabled — something is visibly moving.
-    const rawActiveNow = signals.isVoice || (signals.motionEnabled && signals.isMotion);
+    // "Active" (should run at normalSpeed) means someone is talking. Motion
+    // doesn't block a speed-up; it only softens it (see output()).
+    const rawActiveNow = signals.isVoice;
+    this.motionSlowdown = signals.motionEnabled && signals.isMotion;
 
     // The media clock jumped backwards (loop, rewind) or far forward (skip)
     // without a seek event: start timing afresh from here.
@@ -166,37 +200,69 @@ export class SpeedController {
     this.lastUpdateAt = now;
     // Media ms per wall ms right now (the effective playback rate).
     const rate = dt > 0 && mediaDt > 0 ? Math.min(16, mediaDt / dt) : 1;
-    this.level += ((rawActiveNow ? 1 : 0) - this.level) * (1 - Math.exp(-dt / SMOOTHING_TAU_MS));
 
-    const smoothedActive = this.rawActive ? this.level > ACTIVE_OFF : this.level >= ACTIVE_ON;
-    if (smoothedActive !== this.rawActive) {
-      this.rawActive = smoothedActive;
-      this.rawStateSince = mediaNow - SETTLE_MS * rate;
+    if (signals.debounced) {
+      this.level = rawActiveNow ? 1 : 0;
+      if (rawActiveNow !== this.rawActive) {
+        this.rawActive = rawActiveNow;
+        this.rawStateSince = mediaNow;
+      }
+    } else {
+      this.level += ((rawActiveNow ? 1 : 0) - this.level) * (1 - Math.exp(-dt / SMOOTHING_TAU_MS));
+      const smoothedActive = this.rawActive ? this.level > ACTIVE_OFF : this.level >= ACTIVE_ON;
+      if (smoothedActive !== this.rawActive) {
+        this.rawActive = smoothedActive;
+        this.rawStateSince = mediaNow - SETTLE_MS * rate;
+      }
     }
 
     const rawStateDuration = mediaNow - this.rawStateSince;
+    const profile = PAUSE_PROFILES[settings.pauseHandling] ?? PAUSE_PROFILES.balanced;
+    this.silenceScale = Math.min(this.silenceScale, profile.maxScale);
     const minSilenceMs = settings.minSilenceMs * this.silenceScale;
     if (this.committedQuiet && this.rawActive && rawStateDuration >= settings.minVoiceMs) {
       this.committedQuiet = false;
+      if (settings.replaySentenceStarts && !signals.forceNormal) {
+        // Resume just before the detected onset, but never earlier than
+        // where fast playback began (that part was already heard at 1x).
+        const target = Math.max(this.quietSinceMedia, this.rawStateSince - REPLAY_LEAD_MS);
+        const back = mediaNow - target;
+        if (back >= REPLAY_MIN_MS && back <= REPLAY_MAX_MS) this.pendingReplayTo = target;
+      }
       // Learn from how long that quiet stretch really lasted.
       const quietMs = this.rawStateSince - this.quietSinceMedia;
       const savedMs = quietMs * (1 - settings.normalSpeed / Math.max(settings.quietSpeed, settings.normalSpeed + 0.01));
       this.silenceScale =
-        savedMs < MIN_WORTHWHILE_SAVING_MS
-          ? Math.min(MAX_SILENCE_SCALE, this.silenceScale * SILENCE_SCALE_UP)
+        savedMs < profile.minSavingMs
+          ? Math.min(profile.maxScale, this.silenceScale * SILENCE_SCALE_UP)
           : Math.max(1, this.silenceScale * SILENCE_SCALE_DOWN);
     } else if (!this.committedQuiet && !this.rawActive && rawStateDuration >= minSilenceMs) {
       this.committedQuiet = true;
       this.quietSinceMedia = mediaNow;
+      this.quietSinceWall = now;
     }
 
     return this.output(settings, signals.forceNormal);
   }
 
+  /** Media time (ms) to jump back to for sentence-start replay, once. */
+  takeReplayTarget(): number | null {
+    const t = this.pendingReplayTo;
+    this.pendingReplayTo = null;
+    return t;
+  }
+
   private output(settings: ExtensionSettings, forceNormal = false): number {
-    this.state.currentMultiplier =
-      this.committedQuiet && !forceNormal ? settings.quietSpeed : settings.normalSpeed;
-    return this.state.currentMultiplier;
+    let rate = settings.normalSpeed;
+    if (this.committedQuiet && !forceNormal) {
+      const progress = Math.min(1, (this.lastWall - this.quietSinceWall) / RAMP_MS);
+      const step = Math.min(RAMP_STEPS, Math.floor(progress * RAMP_STEPS) + 1);
+      let target = settings.quietSpeed;
+      if (this.motionSlowdown) target = settings.normalSpeed + (settings.quietSpeed - settings.normalSpeed) * MOTION_SPEED_FRACTION;
+      rate = settings.normalSpeed + ((target - settings.normalSpeed) * step) / RAMP_STEPS;
+    }
+    this.state.currentMultiplier = rate;
+    return rate;
   }
 
   get snapshot(): Readonly<PipelineState> {
