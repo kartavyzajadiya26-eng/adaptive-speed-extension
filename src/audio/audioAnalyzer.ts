@@ -144,6 +144,9 @@ export class AudioAnalyzer {
   private lastCtxTime = -1;
   private disposed = false;
   private modelGaveUp = false;
+  /** Whether capture should run (false while the video is paused). Kept
+   *  here because the capture node only exists once its module has loaded. */
+  private captureActive = true;
   private inputGain = 1;
 
   constructor(video: HTMLVideoElement) {
@@ -221,6 +224,7 @@ export class AudioAnalyzer {
               console.warn(`[AdaptiveSpeed] Speech model too slow on this device (${d.avgMs} ms/chunk); using fallback detector.`);
               this.modelGaveUp = true;
               this.workletVoice = null;
+              this.stopCaptureNode();
             } else if (typeof d.p === "number") {
               voice.update(d as { p: number; voice: boolean; ready: boolean });
             }
@@ -229,6 +233,7 @@ export class AudioAnalyzer {
           this.captureNode = node;
           this.workletVoice = voice;
           if (this.inputGain !== 1) node.port.postMessage({ gain: this.inputGain });
+          if (!this.captureActive) node.port.postMessage({ active: false });
           return;
         } catch (err) {
           console.warn("[AdaptiveSpeed] Could not start audio-thread capture:", err);
@@ -269,6 +274,7 @@ export class AudioAnalyzer {
 
   /** Pause/resume capture (paused videos feed silence we don't need to analyse). */
   setCaptureActive(active: boolean): void {
+    this.captureActive = active;
     this.captureNode?.port.postMessage({ active });
     if (!active) {
       this.fallbackResampler?.reset();
@@ -290,7 +296,7 @@ export class AudioAnalyzer {
   sample(now = performance.now()): AudioFrameFeatures {
     this.analyser.getFloatTimeDomainData(this.timeData);
     this.analyser.getByteFrequencyData(this.freqData);
-    if (this.fallbackResampler) this.feedFallbackCapture();
+    if (this.fallbackResampler && this.captureActive) this.feedFallbackCapture();
 
     const rmsDb = computeRmsDb(this.timeData);
     if (this.firstSampleAt === null) this.firstSampleAt = now;
@@ -314,19 +320,26 @@ export class AudioAnalyzer {
     this.lastCtxTime = t;
   }
 
+  /** Ends the audio-thread processor, so it stops running and its copy of
+   *  the model can be garbage-collected. */
+  private stopCaptureNode(): void {
+    const node = this.captureNode;
+    if (!node) return;
+    this.captureNode = null;
+    node.port.onmessage = null;
+    node.port.postMessage("stop");
+    try {
+      this.source.disconnect(node);
+    } catch {
+      /* already disconnected */
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
     this.workletVoice = null;
     this.mainThreadVoice = null;
-    if (this.captureNode) {
-      this.captureNode.port.onmessage = null;
-      try {
-        this.captureNode.disconnect();
-      } catch {
-        /* already disconnected */
-      }
-      this.captureNode = null;
-    }
+    this.stopCaptureNode();
     try {
       this.analyser.disconnect();
       this.source.disconnect();

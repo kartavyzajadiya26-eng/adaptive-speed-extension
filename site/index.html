@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Adaptive Speed: a Chrome extension that plays speech at normal speed and silent pauses at 2.5x.">
+<title>Adaptive Speed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+:root{
+  --bg:#F5F7F5; --surface:#FFFFFF; --ink:#13201E; --muted:#56655F; --line:#D6DFDB;
+  --speech:#0B7A70; --speech-soft:#D5EEEA; --fast:#C2410C; --fast-soft:#FBE3D6;
+  --on-accent:#FFFFFF; --wave:#9DB3AD;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --body:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --bg:#0D1413; --surface:#141D1B; --ink:#E4EEEB; --muted:#9AADA7; --line:#26332F;
+  --speech:#2BC4B0; --speech-soft:#123430; --fast:#FF8A4C; --fast-soft:#3A2116;
+  --on-accent:#0D1413; --wave:#3F5752;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0D1413; --surface:#141D1B; --ink:#E4EEEB; --muted:#9AADA7; --line:#26332F;
+  --speech:#2BC4B0; --speech-soft:#123430; --fast:#FF8A4C; --fast-soft:#3A2116;
+  --on-accent:#0D1413; --wave:#3F5752;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--body);padding-inline:20px;padding-block:0}
+.wrap{max-width:1080px;margin:0 auto}
+h1,h2,h3{font-family:var(--display);line-height:1.08;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.4rem,6vw,4.4rem);font-weight:800;letter-spacing:-.02em}
+h2{font-size:clamp(1.7rem,3.4vw,2.5rem);font-weight:700;letter-spacing:-.01em}
+h3{font-size:1.2rem;font-weight:700}
+p{margin:0;max-width:65ch}
+a{color:var(--speech)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.label{font:600 .75rem/1 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.x1{color:var(--speech)} .x25{color:var(--fast)}
+
+/* nav */
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-block:20px}
+.brand{display:flex;align-items:center;gap:10px;font:700 1.05rem var(--display);color:var(--ink);text-decoration:none}
+.brand svg{width:28px;height:28px}
+.navlinks{display:flex;gap:20px;flex-wrap:wrap}
+.navlinks a{color:var(--muted);text-decoration:none;font-weight:500;font-size:.95rem}
+.navlinks a:hover{color:var(--ink)}
+@media (max-width:640px){.navlinks{display:none}}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:0 22px;border-radius:999px;font:700 1rem var(--body);text-decoration:none;cursor:pointer;border:2px solid transparent;transition:transform .15s ease,background-color .15s ease,border-color .15s ease}
+.btn-primary{background:var(--speech);color:var(--on-accent)}
+.btn-primary:hover{transform:translateY(-1px)}
+.btn-ghost{border-color:var(--line);color:var(--ink);background:transparent}
+.btn-ghost:hover{border-color:var(--ink)}
+.btn svg{width:20px;height:20px}
+:focus-visible{outline:3px solid var(--fast);outline-offset:3px;border-radius:8px}
+
+/* hero */
+.hero{display:grid;gap:28px;padding-block:36px 24px}
+.hero p.lede{font-size:1.2rem;color:var(--muted)}
+.hero .ctas{display:flex;gap:12px;flex-wrap:wrap}
+.hero .fine{font-size:.9rem;color:var(--muted)}
+
+/* demo */
+.demo{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px;display:grid;gap:16px}
+.demo-top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.speed{font:700 clamp(2.6rem,7vw,4rem)/1 var(--mono);transition:color .2s ease}
+.clocks{display:flex;gap:28px;flex-wrap:wrap}
+.clock .v{font:700 1.4rem var(--mono)}
+.canvas-box{position:relative;width:100%;aspect-ratio:1000/190;max-width:100%}
+.canvas-box canvas{width:100%;height:100%;display:block}
+.demo-bottom{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.9rem;color:var(--muted)}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.caption{font-size:.9rem;color:var(--muted)}
+
+section{padding-block:64px;border-top:1px solid var(--line)}
+.section-head{display:grid;gap:12px;margin-bottom:32px}
+.section-head p{color:var(--muted);font-size:1.08rem}
+
+/* pipeline */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;counter-reset:s}
+.step{display:grid;gap:10px;align-content:start}
+.step .n{font:700 .85rem var(--mono);color:var(--fast)}
+.step p{color:var(--muted);font-size:.97rem}
+.rules{margin-top:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.rule{background:var(--surface);padding:18px;display:grid;gap:6px}
+.rule .k{font:700 1.05rem var(--mono)}
+.rule p{font-size:.93rem;color:var(--muted)}
+
+/* compat */
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{text-align:left;padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top;font-size:.95rem}
+th{font:600 .75rem var(--body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+.pill{display:inline-block;font:700 .78rem var(--body);padding:3px 10px;border-radius:999px;white-space:nowrap}
+.ok{background:var(--speech-soft);color:var(--speech)}
+.mid{background:var(--fast-soft);color:var(--fast)}
+.no{background:var(--line);color:var(--muted)}
+
+/* results */
+.results{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.result{display:grid;gap:10px;align-content:start}
+.bars{display:grid;gap:6px}
+.bar{display:grid;grid-template-columns:62px 1fr 56px;align-items:center;gap:8px;font-size:.85rem;color:var(--muted)}
+.track{height:10px;background:var(--line);border-radius:5px;overflow:hidden}
+.fill{height:100%;border-radius:5px}
+.bar .mono{text-align:right;color:var(--ink)}
+.note{margin-top:20px;font-size:.9rem;color:var(--muted)}
+
+/* install */
+.install{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:32px;align-items:start}
+ol.how{margin:0;padding:0;list-style:none;display:grid;gap:14px;counter-reset:i}
+ol.how li{counter-increment:i;display:grid;grid-template-columns:36px 1fr;gap:12px;align-items:start}
+ol.how li::before{content:counter(i);width:32px;height:32px;border-radius:50%;background:var(--ink);color:var(--bg);display:grid;place-items:center;font:700 .9rem var(--mono)}
+code{font-family:var(--mono);font-size:.9em;background:var(--surface);border:1px solid var(--line);padding:1px 6px;border-radius:6px;white-space:nowrap}
+.copy{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.copy button{min-height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 .85rem var(--body);cursor:pointer}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:24px;display:grid;gap:14px}
+.panel pre{margin:0;font:500 .85rem/1.55 var(--mono);white-space:pre-wrap;color:var(--muted)}
+
+/* privacy + faq */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:32px}
+.checks{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.checks li{display:grid;grid-template-columns:22px 1fr;gap:10px}
+.checks svg{width:22px;height:22px;color:var(--speech)}
+details{border-bottom:1px solid var(--line);padding-block:14px}
+summary{cursor:pointer;font-weight:700;list-style-position:outside}
+details p{margin-top:8px;color:var(--muted)}
+footer{padding-block:40px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<nav>
+  <a class="brand" href="#top" aria-label="Adaptive Speed home">
+    <svg viewBox="0 0 28 28" aria-hidden="true"><rect x="2" y="10" width="3" height="8" rx="1.5" fill="currentColor"/><rect x="7" y="5" width="3" height="18" rx="1.5" fill="currentColor"/><rect x="12" y="9" width="3" height="10" rx="1.5" fill="currentColor"/><path d="M18 8l8 6-8 6z" fill="#C2410C"/></svg>
+    Adaptive Speed
+  </a>
+  <div class="navlinks"><a href="#how">How it works</a><a href="#where">Where it works</a><a href="#results">Results</a><a href="#install">Install</a></div>
+</nav>
+
+<header class="hero" id="top">
+  <p class="label">Free Chrome extension · runs on your computer</p>
+  <h1>Talking plays at <span class="x1">1×</span>.<br>Silence plays at <span class="x25">2.5×</span>.</h1>
+  <p class="lede">Adaptive Speed listens to the video you're watching and fast-forwards only through the pauses: the teacher writing on the board, the speaker taking a breath, the dead air between slides. Every word still plays at normal speed.</p>
+  <div class="ctas">
+    <a class="btn btn-primary" href="https://github.com/kartavyzajadiya26-eng/adaptive-speed-extension/releases/latest/download/adaptive-speed-extension.zip">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      Download for Chrome
+    </a>
+    <a class="btn btn-ghost" href="#install">How to install</a>
+  </div>
+  <p class="fine">Version 0.1.0 · 1 MB zip · Chrome, Edge, Brave and other Chromium browsers</p>
+
+  <div class="demo" aria-label="Demo: one minute of a lecture played with Adaptive Speed">
+    <div class="demo-top">
+      <div>
+        <div class="label">Playback speed</div>
+        <div class="speed x1" id="speed" aria-live="off">1.0×</div>
+      </div>
+      <div class="clocks">
+        <div class="clock"><div class="label">Video time</div><div class="v" id="cVideo">0:00</div></div>
+        <div class="clock"><div class="label">Your time</div><div class="v" id="cYou">0:00</div></div>
+        <div class="clock"><div class="label">Saved</div><div class="v x25" id="cSaved">0.0 s</div></div>
+      </div>
+    </div>
+    <div class="canvas-box"><canvas id="wave" role="img" aria-label="Waveform of one minute of a lecture. Speech stretches play at normal speed, pauses longer than 0.6 seconds are played at 2.5 times speed."></canvas></div>
+    <div class="demo-bottom">
+      <div class="legend">
+        <span><span class="sw" style="background:var(--speech)"></span>Speech: normal speed</span>
+        <span><span class="sw" style="background:var(--fast)"></span>Pause: sped up</span>
+      </div>
+      <button class="btn btn-ghost" id="play" type="button" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" id="playIcon"><path d="M7 4l13 8-13 8z"/></svg>
+        <span id="playLabel">Play the demo</span>
+      </button>
+    </div>
+    <p class="caption">One minute of a lecture, simulated with the extension's real rules: a pause must last 0.6 s before speeding up, and speech returns to 1× at once. The demo runs 4× faster than real time.</p>
+  </div>
+</header>
+
+<section id="how">
+  <div class="section-head">
+    <p class="label">What it does on a real web page</p>
+    <h2>From the video's sound to its speed, 30 times a second</h2>
+    <p>You don't press anything. Open a video on YouTube, a course site or a news page and the extension goes through these four steps on its own.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><span class="n">01 · Find</span><h3>Spots every video</h3><p>It watches the page for <code>&lt;video&gt;</code> players, including ones that appear later, like YouTube's next video or an embedded player.</p></div>
+    <div class="step"><span class="n">02 · Listen</span><h3>Hears speech on your device</h3><p>A small speech-detection model (Silero VAD, about 1 MB) checks every 32 ms of sound: is someone talking? It runs in the browser's audio thread, so the page itself stays smooth.</p></div>
+    <div class="step"><span class="n">03 · Decide</span><h3>Waits for a real pause</h3><p>A breath between words isn't a pause. Only after 0.6 s of silence does it speed up, and it learns each speaker's rhythm so it stops reacting to their usual short gaps.</p></div>
+    <div class="step"><span class="n">04 · Play</span><h3>Changes the speed</h3><p>It eases up to 2.5× over a quarter of a second. The moment someone speaks it drops back to 1× and replays the first fraction of a second, so no word starts fast.</p></div>
+  </div>
+  <div class="rules">
+    <div class="rule"><span class="k">0.6 s</span><p>Silence needed before speeding up. Pause handling can be set to relaxed, balanced or aggressive.</p></div>
+    <div class="rule"><span class="k">0.2 s</span><p>How far it jumps back when speech starts during a fast stretch, so you hear the first syllable at 1×.</p></div>
+    <div class="rule"><span class="k">1× / 2.5×</span><p>Default speeds for talking and silence. Set both in the popup; you can also speed up talking itself.</p></div>
+    <div class="rule"><span class="k">Motion mode</span><p>Optional: when the picture is moving (a demo, a diagram being drawn) pauses only go to 1.6×, so you don't miss it.</p></div>
+  </div>
+</section>
+
+<section id="where">
+  <div class="section-head">
+    <p class="label">Compatibility</p>
+    <h2>Where it works</h2>
+    <p>It works wherever the browser lets an extension hear a video's sound. When it can't hear, it leaves the speed alone rather than guessing.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Site or situation</th><th>Result</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>YouTube</td><td><span class="pill ok">Works</span></td><td>Tested on lectures and TED talks. Replays when speech starts cost under 30 ms.</td></tr>
+        <tr><td>TED.com, course sites, news players</td><td><span class="pill ok">Works</span></td><td>Any standard web video player whose sound is served normally.</td></tr>
+        <tr><td>Videos inside other sites' frames</td><td><span class="pill ok">Usually works</span></td><td>The extension runs in every frame, so embedded players get it too.</td></tr>
+        <tr><td>Muted videos</td><td><span class="pill mid">Stays at 1×</span></td><td>With no sound there is nothing to judge, so it doesn't touch the speed.</td></tr>
+        <tr><td>Videos served from another site without permission (no CORS)</td><td><span class="pill mid">Stays at 1×</span></td><td>The browser blocks the extension from hearing them. This is a browser security rule.</td></tr>
+        <tr><td>Netflix, Prime Video and other protected (DRM) video</td><td><span class="pill no">Doesn't work</span></td><td>Protected video hides its sound from all extensions.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="results">
+  <div class="section-head">
+    <p class="label">Measured, not promised</p>
+    <h2>How well it tells speech from everything else</h2>
+    <p>Scored 60 times per second on public recordings: read speech (LibriSpeech), ten genres of music (GTZAN), and everyday sounds like applause, rain and alarms (ESC-50). "Before" is the extension's earlier rule-based detector; "now" is the speech model.</p>
+  </div>
+  <div class="results">
+    <div class="result">
+      <h3>Catches quiet speech</h3>
+      <div class="bars">
+        <div class="bar"><span>Before</span><div class="track"><div class="fill" style="width:44.7%;background:var(--wave)"></div></div><span class="mono">45%</span></div>
+        <div class="bar"><span>Now</span><div class="track"><div class="fill" style="width:92.6%;background:var(--speech)"></div></div><span class="mono">93%</span></div>
+      </div>
+      <p class="caption">Share of soft-spoken speech recognised as speech.</p>
+    </div>
+    <div class="result">
+      <h3>Hears speech through noise</h3>
+      <div class="bars">
+        <div class="bar"><span>Before</span><div class="track"><div class="fill" style="width:12.6%;background:var(--wave)"></div></div><span class="mono">13%</span></div>
+        <div class="bar"><span>Now</span><div class="track"><div class="fill" style="width:91.4%;background:var(--speech)"></div></div><span class="mono">91%</span></div>
+      </div>
+      <p class="caption">Speech with loud background noise (5 dB signal-to-noise).</p>
+    </div>
+    <div class="result">
+      <h3>Ignores music</h3>
+      <div class="bars">
+        <div class="bar"><span>Before</span><div class="track"><div class="fill" style="width:23.9%;background:var(--wave)"></div></div><span class="mono">24%</span></div>
+        <div class="bar"><span>Now</span><div class="track"><div class="fill" style="width:2.3%;background:var(--fast)"></div></div><span class="mono">2%</span></div>
+      </div>
+      <p class="caption">Share of music wrongly treated as speech. Lower is better.</p>
+    </div>
+    <div class="result">
+      <h3>Doesn't rush your lesson</h3>
+      <div class="bars">
+        <div class="bar"><span>Before</span><div class="track"><div class="fill" style="width:72%;background:var(--wave)"></div></div><span class="mono">4.3 s</span></div>
+        <div class="bar"><span>Now</span><div class="track"><div class="fill" style="width:5.7%;background:var(--fast)"></div></div><span class="mono">0.3 s</span></div>
+      </div>
+      <p class="caption">Seconds of speech per minute that you'd only ever hear fast, on a softly spoken talk. Lower is better.</p>
+    </div>
+  </div>
+  <p class="note">The model takes about 1 ms for every 32 ms of sound and runs off the page's main thread. If a computer is too slow for it, the extension switches to its lighter backup detector by itself. Full numbers are in the project's test history.</p>
+</section>
+
+<section id="install">
+  <div class="section-head">
+    <p class="label">Install in about a minute</p>
+    <h2>Add it to Chrome</h2>
+    <p>Adaptive Speed isn't on the Chrome Web Store yet, so you add it in developer mode. It's the same extension, loaded from a folder.</p>
+  </div>
+  <div class="install">
+    <ol class="how">
+      <li><span><strong>Download and unzip</strong> <a href="https://github.com/kartavyzajadiya26-eng/adaptive-speed-extension/releases/latest/download/adaptive-speed-extension.zip">adaptive-speed-extension.zip</a>. You get a folder with a <code>manifest.json</code> inside.</span></li>
+      <li><span class="copy"><span><strong>Open</strong> <code id="extUrl">chrome://extensions</code> in a new tab</span><button type="button" id="copyBtn">Copy</button></span></li>
+      <li><span><strong>Turn on Developer mode</strong> with the switch in the top-right corner.</span></li>
+      <li><span><strong>Click Load unpacked</strong> and choose the unzipped folder: the one that contains <code>manifest.json</code>, not a folder above it.</span></li>
+      <li><span><strong>Play any video.</strong> A small badge on the video shows the current speed. Click the extension's icon to change the speeds.</span></li>
+    </ol>
+    <div class="panel">
+      <p class="label">If Chrome says "Could not load manifest"</p>
+      <p>You picked the folder one level too high. Open it and select the folder that has <code>manifest.json</code> directly inside.</p>
+      <p class="label">See what it's deciding</p>
+      <p>On a video page, open the console (Cmd + Option + J on Mac, Ctrl + Shift + J on Windows), paste this, then reload:</p>
+      <pre>localStorage.adaptiveSpeedDebug = "1"</pre>
+      <p>Once a second it prints whether it hears speech, how sure it is, and the current speed.</p>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="two">
+    <div class="section-head" style="margin-bottom:0">
+      <p class="label">Privacy</p>
+      <h2>The sound never leaves your computer</h2>
+      <p>Everything happens inside your browser. There's no account, no server and no tracking.</p>
+    </div>
+    <ul class="checks">
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><span>The only permission it asks for is saving your settings.</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><span>Its one network request loads its own speech model, from inside the extension.</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><span>Audio is analysed in memory, 32 ms at a time, and never recorded or stored.</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><span>The code is open on GitHub, so anyone can check.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="section-head"><p class="label">Questions</p><h2>Good to know</h2></div>
+  <details><summary>Will it skip parts of the video?</summary><p>No. It never jumps ahead. Pauses still play, just faster, and when speech starts it jumps back about 0.2 s so you hear the first syllable at normal speed.</p></details>
+  <details><summary>Does it understand Hindi, or English with an Indian accent?</summary><p>It doesn't need to understand words; it only listens for the sound of a human voice. The speech model was trained on many languages. Our published numbers come from English recordings, so if it misses speech in your lectures, please report the video and the time.</p></details>
+  <details><summary>How much time does it save?</summary><p>It depends on how often the speaker pauses. On our test talks it saved 8 to 13 seconds per 3 minutes with the balanced setting. Lectures with long writing-on-the-board pauses save much more. The aggressive setting saves more but changes speed more often.</p></details>
+  <details><summary>Can I turn it off for one video?</summary><p>Yes. Click the extension's icon and switch it off; the video goes back to 1× straight away.</p></details>
+  <details><summary>Will it slow down my computer?</summary><p>The speech model uses about 1 ms of every 32 ms of audio, on the browser's audio thread. In our tests the page stayed smooth, with no dropped frames caused by the extension.</p></details>
+</section>
+
+<footer>
+  <span>Adaptive Speed 0.1.0 · Speech detection by <a href="https://github.com/snakers4/silero-vad">Silero VAD</a> (MIT licence)</span>
+  <a href="https://github.com/kartavyzajadiya26-eng/adaptive-speed-extension">Source code on GitHub</a>
+</footer>
+</div>
+
+<script>
+(function () {
+  // A minute of a lecture: [start s, end s] of each spoken stretch.
+  const SPEECH = [[0.4,6.8],[7.3,13.9],[15.6,21.2],[21.7,24.1],[28.9,35.5],[36.0,41.8],[43.9,47.2],[47.6,53.0],[57.4,60]];
+  const DURATION = 60, NORMAL = 1, FAST = 2.5, WAIT = 0.6, RAMP = 0.24, DEMO_RATE = 4;
+  const isSpeech = (t) => SPEECH.some(([a, b]) => t >= a && t < b);
+
+  // Precompute: speed the extension would use at each content time.
+  const STEP = 0.02, rateAt = [];
+  let quietFor = 0, fastFor = 0;
+  for (let t = 0; t < DURATION; t += STEP) {
+    let r = NORMAL;
+    if (isSpeech(t)) { quietFor = 0; fastFor = 0; }
+    else {
+      quietFor += STEP;
+      if (quietFor >= WAIT) { fastFor += STEP / FAST; const k = Math.min(3, Math.floor((fastFor / RAMP) * 3) + 1); r = NORMAL + (FAST - NORMAL) * k / 3; }
+    }
+    rateAt.push(r);
+  }
+  const rate = (t) => rateAt[Math.min(rateAt.length - 1, Math.floor(t / STEP))];
+
+  // Pseudo-random waveform heights.
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const BARS = 240, heights = [];
+  for (let i = 0; i < BARS; i++) { const t = (i + 0.5) / BARS * DURATION; heights.push(isSpeech(t) ? 0.35 + 0.65 * rnd() * (0.6 + 0.4 * Math.sin(i * 0.7)) : 0.04 + 0.05 * rnd()); }
+
+  const canvas = document.getElementById("wave"), ctx = canvas.getContext("2d");
+  const els = { speed: document.getElementById("speed"), video: document.getElementById("cVideo"), you: document.getElementById("cYou"), saved: document.getElementById("cSaved"), play: document.getElementById("play"), label: document.getElementById("playLabel"), icon: document.getElementById("playIcon") };
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  let t = 0, wall = 0, playing = false, last = 0;
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const speechC = css("--speech"), fastC = css("--fast"), waveC = css("--wave"), lineC = css("--line"), mutedC = css("--muted");
+    const top = 6, base = h - 26, mid = (top + base) / 2, amp = (base - top) / 2, bw = w / BARS;
+    // pause bands that get sped up
+    let i = 0;
+    while (i < rateAt.length) { if (rateAt[i] > NORMAL) { let j = i; while (j < rateAt.length && rateAt[j] > NORMAL) j++; const x0 = i * STEP / DURATION * w, x1 = j * STEP / DURATION * w; ctx.fillStyle = fastC; ctx.globalAlpha = 0.14; ctx.fillRect(x0, top, x1 - x0, base - top); ctx.globalAlpha = 1; ctx.fillRect(x0, base + 4, x1 - x0, 4); i = j; } else i++; }
+    // waveform
+    for (let k = 0; k < BARS; k++) {
+      const tc = (k + 0.5) / BARS * DURATION, sp = isSpeech(tc), hh = Math.max(1.5, heights[k] * amp);
+      ctx.fillStyle = tc > t ? waveC : sp ? speechC : rate(tc) > NORMAL ? fastC : mutedC;
+      ctx.fillRect(k * bw + bw * 0.15, mid - hh, Math.max(1, bw * 0.7), hh * 2);
+    }
+    // axis
+    ctx.fillStyle = lineC; ctx.fillRect(0, base + 12, w, 1);
+    ctx.fillStyle = mutedC; ctx.font = "500 11px " + css("--mono");
+    for (let s = 0; s <= 60; s += 10) { const x = Math.min(w - 22, s / DURATION * w); ctx.fillText(`0:${String(s).padStart(2, "0")}`.replace("0:60", "1:00"), Math.max(0, x - (s ? 12 : 0)), h - 2); }
+    // playhead
+    const px = t / DURATION * w; ctx.fillStyle = css("--ink"); ctx.fillRect(px - 1, 0, 2, base + 8);
+  }
+
+  function show() {
+    const r = t >= DURATION ? NORMAL : rate(t);
+    els.speed.textContent = r.toFixed(1) + "×";
+    els.speed.className = "speed " + (r > NORMAL ? "x25" : "x1");
+    els.video.textContent = fmt(t); els.you.textContent = fmt(wall); els.saved.textContent = (t - wall).toFixed(1) + " s";
+    draw();
+  }
+
+  function setPlaying(p) {
+    playing = p; els.play.setAttribute("aria-pressed", String(p));
+    els.label.textContent = p ? "Pause" : t >= DURATION ? "Play again" : "Play the demo";
+    els.icon.innerHTML = p ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
+    if (p) { last = performance.now(); requestAnimationFrame(frame); }
+  }
+
+  function frame(now) {
+    if (!playing) return;
+    const dt = Math.min(0.1, (now - last) / 1000) * DEMO_RATE; last = now;
+    wall += dt; t = Math.min(DURATION, t + dt * rate(t));
+    show();
+    if (t >= DURATION) { setPlaying(false); return; }
+    requestAnimationFrame(frame);
+  }
+
+  els.play.addEventListener("click", () => {
+    if (!playing && t >= DURATION) { t = 0; wall = 0; }
+    setPlaying(!playing);
+  });
+
+  // At rest (and for reduced motion): show the finished minute with its result.
+  function finalState() { let tt = 0, ww = 0; while (tt < DURATION) { ww += STEP; tt += STEP * rate(tt); } t = DURATION; wall = ww; show(); els.label.textContent = "Play the demo"; }
+  finalState();
+  window.addEventListener("resize", draw);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  // Copy the chrome://extensions address.
+  const copyBtn = document.getElementById("copyBtn");
+  copyBtn.addEventListener("click", () => {
+    const text = document.getElementById("extUrl").textContent;
+    const done = () => { copyBtn.textContent = "Copied"; setTimeout(() => (copyBtn.textContent = "Copy"), 1500); };
+    navigator.clipboard.writeText(text).then(done, () => { const r = document.createRange(); r.selectNodeContents(document.getElementById("extUrl")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); copyBtn.textContent = "Selected, press Cmd+C"; });
+  });
+})();
+</script>
+</body>
+</html>

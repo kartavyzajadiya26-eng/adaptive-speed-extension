@@ -16,8 +16,10 @@
  *                camera grain, which raises every block equally.
  *       global — the typical block's change, compared against a learned
  *                noise floor. Catches pans and whole-scene movement.
- *  4. Motion must persist across two consecutive samples, so a single
- *     scene cut or compression glitch doesn't count.
+ *  4. Motion must persist across two consecutive samples to start, so a
+ *     single scene cut or compression glitch doesn't count, and two still
+ *     samples to end, so an on-and-off cursor doesn't flip the playback
+ *     speed (every rate change restarts Chrome's time-stretcher).
  *
  * The previous version compared the mean absolute difference of a 48x27
  * thumbnail with a threshold, so camera grain and fades read as motion and
@@ -85,15 +87,19 @@ const INITIAL_FLOOR = 2;
 
 /**
  * Stateful decision on top of motionScores: learned noise floor for the
- * global score, and two-sample persistence.
+ * global score, and two-sample persistence both ways.
  */
 export class MotionJudge {
   private globalFloor = -1;
   private streak = 0;
+  private stillStreak = 0;
+  private moving = false;
 
   reset(): void {
     this.globalFloor = -1;
     this.streak = 0;
+    this.stillStreak = 0;
+    this.moving = false;
   }
 
   /** `threshold` is the user's motionThreshold setting (default 10). */
@@ -107,7 +113,10 @@ export class MotionJudge {
     // so steady grain becomes the baseline but sustained motion doesn't.
     this.globalFloor += (scores.global - this.globalFloor) * (scores.global < this.globalFloor ? 0.5 : 0.02);
     this.streak = moving ? this.streak + 1 : 0;
-    return this.streak >= 2;
+    this.stillStreak = moving ? 0 : this.stillStreak + 1;
+    if (this.streak >= 2) this.moving = true;
+    else if (this.stillStreak >= 2) this.moving = false;
+    return this.moving;
   }
 }
 

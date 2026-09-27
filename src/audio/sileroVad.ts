@@ -139,11 +139,14 @@ function conv1dK3Relu(
 const sigmoid = (x: number): number => 1 / (1 + Math.exp(-x));
 
 /**
- * Weights are kept as int8 with one float scale per output row. The model
+ * Weights are kept as int16 with one float scale per output row. The model
  * runs once every 32 ms, and between runs the playing video evicts its
  * weights from the CPU cache; measured in Chrome, reloading ~1 MB of float
  * weights made each run ~5x slower than the same code in a tight loop.
- * int8 cuts that to ~250 KB. Accuracy is checked in eval/checkSilero.ts.
+ * int16 halves that to ~500 KB. int8 (~250 KB) was tried and rejected: it
+ * changed the output by up to 0.09 and flipped a decision. QUANT_BITS is
+ * exported only so eval/checkSilero.ts can compare precisions. Accuracy is
+ * checked there.
  */
 interface QuantMatrix {
   q: Int8Array | Int16Array;

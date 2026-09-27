@@ -299,7 +299,10 @@ export class VideoPipeline {
 
   private sampleMotion(now: number): boolean {
     if (this.settings.mode !== "audio-and-motion" || !this.motion) return true;
-    if (this.motion.tainted) return true; // fail open, see MotionDetector docs
+    // Unreadable frames (cross-origin video without CORS): no motion signal,
+    // so behave as audio-only. Motion only softens speed-ups now, so
+    // reporting "moving" here would cap every pause at the softened speed.
+    if (this.motion.tainted) return false;
 
     const intervalMs = 1000 / Math.max(1, this.settings.motionSampleFps);
     if (now - this.lastMotionSampleAt < intervalMs) return this.lastMotion;
